@@ -19,7 +19,7 @@ STEP 1 - Check signals (once per laptop, before the first participant)
 STEP 2 - Run each participant (P1 to P5, each gets its own random cue order)
   a. In the eye program: n (IMU), c/l/r/u/d (eyes), then g.
   b. During the 3-s countdown, click THIS test window (not Minecraft).
-  c. python command_test.py --participant 1
+  c. python command_test.py --participant 1 --reps #
   d. Press P to start. Follow the cue on screen, return to neutral after each.
   e. 100 trials (10 commands x 10 reps, ~10 min), with a break at trial 50.
      When finished, the window shows DONE and closes by itself.
@@ -54,6 +54,8 @@ REST_S = 2.5         # return-to-neutral time; device output here is ignored
 MOUSE_THRESHOLD = 15 # mouse counts in one direction before it counts as a gaze command
 MOUSE_UP_IS_NEGATIVE_Y = True   # flip if --check shows Look Up/Down reversed
 SEED = 2026          # same cue order as the Excel workbook's P1-P5 sheets
+
+SAVE_FOLDER = r"C:\Users\lia\Downloads\results"   # where all CSV files are saved
 
 KEYS = {pygame.K_w: "W", pygame.K_a: "A", pygame.K_s: "S", pygame.K_d: "D",
         pygame.K_SPACE: "SPACE", pygame.K_LCTRL: "CTRL", pygame.K_RCTRL: "CTRL"}
@@ -259,7 +261,7 @@ if __name__ == "__main__":
     ap.add_argument("--reps", type=int, default=REPS)
     ap.add_argument("--response-s", type=float, default=RESPONSE_S)
     ap.add_argument("--rest-s", type=float, default=REST_S)
-    ap.add_argument("--out", default="results")
+    ap.add_argument("--out", default="SAVE_FOLDER")
     a = ap.parse_args()
     if a.check:
         check_mode()
@@ -268,4 +270,3 @@ if __name__ == "__main__":
         run(a.participant, a.reps, a.response_s, a.rest_s, a.out)
     else:
         ap.error("use --check or --participant N")
-
