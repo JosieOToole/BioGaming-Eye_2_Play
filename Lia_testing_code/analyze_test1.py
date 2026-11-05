@@ -1,5 +1,7 @@
 """
-Analyze Test 1 results: python analyze_test1.py results
+Analyze Test 1 results.
+  python analyze_test1.py                 (uses RESULTS_FOLDER below)
+  python analyze_test1.py <other folder>  (overrides it)
 Reads every P*_test1.csv in the folder and writes into results/analysis/:
   accuracy_by_command.csv, confusion_counts.csv, confusion_percent.csv,
   response_time_by_command.csv, and three figures (PNG).
@@ -14,10 +16,21 @@ COMMANDS = ["Forward (W)", "Back (S)", "Left (A)", "Right (D)", "Jump", "Sprint"
             "Look Left", "Look Right", "Look Up", "Look Down"]
 DETECTED = COMMANDS + ["No response"]
 TARGET_MS = 400
+MIN_RT_MS = 200      # faster than human reaction -> movement started before the cue; left out of time stats
+RESULTS_FOLDER = r"C:\Users\tranl\OneDrive - Johns Hopkins\Fall 2026\Instrumentation\Bio gaming\results"
 
-folder = sys.argv[1] if len(sys.argv) > 1 else "results"
+# Use a folder from the command line only if it's a real folder (Jupyter adds its own arguments)
+folder = sys.argv[1] if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else RESULTS_FOLDER
+
+# Every P*.csv in the folder (any name after P#), except backup copies
+files = [p for p in sorted(glob.glob(os.path.join(folder, "P*.csv"))) if "backup" not in os.path.basename(p).lower()]
+if not files:
+    sys.exit(f"No P*.csv files found in: {folder}")
+print("Files loaded:"); [print("  ", os.path.basename(p)) for p in files]
+df = pd.concat([pd.read_csv(p) for p in files], ignore_index=True)
+if df.duplicated(["participant", "trial", "attempt", "valid"]).any():
+    sys.exit("Same participant appears in two files - keep only one file per participant in the folder.")
 out = os.path.join(folder, "analysis"); os.makedirs(out, exist_ok=True)
-df = pd.concat([pd.read_csv(p) for p in sorted(glob.glob(os.path.join(folder, "P*_test1.csv")))])
 
 # Drop trials the operator marked for redo (X): any (participant, trial, attempt) with a valid=0 row
 bad = df[df.valid == 0][["participant", "trial", "attempt"]].drop_duplicates()
@@ -37,7 +50,7 @@ for name, s in [("Head commands", by_type.loc["Head"]), ("Eye commands", by_type
     row.update(mean=s.mean(), sd=s.std(ddof=1), n=s.count())
     summ.loc[name] = pd.Series(row)
 (summ * [100 if c not in ("n",) else 1 for c in summ.columns]).round(1).to_csv(os.path.join(out, "accuracy_by_command.csv"))
-print("\nAccuracy (%):\n", (summ[["mean", "sd", "n"]] * [100, 100, 1]).round(1))
+print("\nAccuracy (%):\n", (summ[["mean", "sd", "n"]] * [100, 100, 1]).round(3))
 
 # ---- confusion matrix (pooled)
 cm = pd.crosstab(df.cue, df.detected).reindex(index=COMMANDS, columns=DETECTED, fill_value=0)
@@ -48,6 +61,12 @@ cmp.round(1).to_csv(os.path.join(out, "confusion_percent.csv"))
 
 # ---- response time (correct trials only): cue on screen -> device output
 ok = df[(df.correct == 1) & df.response_ms.notna()]
+fast = ok[ok.response_ms < MIN_RT_MS]
+if len(fast):
+    print(f"\n{len(fast)} correct trial(s) under {MIN_RT_MS} ms (anticipation - left out of time stats):")
+    print(fast[["participant", "trial", "cue", "response_ms"]].to_string(index=False))
+    fast.to_csv(os.path.join(out, "anticipatory_trials.csv"), index=False)
+ok = ok[ok.response_ms >= MIN_RT_MS]
 rt = ok.groupby("cue").response_ms.agg(["count", "median", "mean", "std", "min", "max"]).reindex(COMMANDS)
 rt["% under 400 ms"] = ok.groupby("cue").response_ms.apply(lambda s: (s < TARGET_MS).mean() * 100).reindex(COMMANDS)
 rt.round(0).to_csv(os.path.join(out, "response_time_by_command.csv"))
@@ -63,17 +82,20 @@ except ImportError:
     pass
 
 # ---- figures
+# Figure 1 - mean and SD
 colors = ["#2F5597" if c in COMMANDS[:6] else "#C55A11" for c in COMMANDS]
 fig, ax = plt.subplots(figsize=(9, 4.5))
 ax.bar(COMMANDS, summ.loc[COMMANDS, "mean"] * 100, yerr=summ.loc[COMMANDS, "sd"].fillna(0) * 100,
        capsize=4, color=colors)
-ax.set_ylabel("Accuracy (%)"); ax.set_ylim(0, 110)
-ax.set_title(f"Command accuracy (mean ± SD, n = {df.participant.nunique()} participants)")
-ax.tick_params(axis="x", rotation=35)
+ax.set_ylabel("Accuracy (%, mean ± SD)")
+ax.set_ylim(0, 110)
+ax.set_title(f"Command Recognition Accuracy by Input Modality (n = {df.participant.nunique()})")
 from matplotlib.patches import Patch
-ax.legend(handles=[Patch(color="#2F5597", label="Head (IMU)"), Patch(color="#C55A11", label="Eye (camera)")], loc="lower right")
+ax.legend(handles=[Patch(color="#2F5597", label="Head (IMU)"), Patch(color="#C55A11", label="Eye (camera)")], loc="upper right")
 fig.tight_layout(); fig.savefig(os.path.join(out, "fig_accuracy.png"), dpi=200); plt.close(fig)
 
+
+# Figure 2 - Confusion matrix (% of cued trials, pooled)
 fig, ax = plt.subplots(figsize=(9, 7))
 im = ax.imshow(cmp.values, cmap="Blues", vmin=0, vmax=100)
 ax.set_xticks(range(len(DETECTED))); ax.set_xticklabels(DETECTED, rotation=45, ha="right")
@@ -82,17 +104,24 @@ for i in range(cmp.shape[0]):
     for j in range(cmp.shape[1]):
         v = cmp.values[i, j]
         if v > 0: ax.text(j, i, f"{v:.0f}", ha="center", va="center", color="white" if v > 60 else "black", fontsize=8)
-ax.set_xlabel("Detected command"); ax.set_ylabel("Cued command"); ax.set_title("Confusion matrix (% of cued trials, pooled)")
+ax.set_xlabel("Detected command"); ax.set_ylabel("Cued command");
+ax.set_title("Classification Confusion Matrix: Cued vs. Detected Commands")
 fig.colorbar(im, ax=ax, fraction=0.04, label="%")
 fig.tight_layout(); fig.savefig(os.path.join(out, "fig_confusion.png"), dpi=200); plt.close(fig)
 
+
+# Figure 3 - Response time per command
 fig, ax = plt.subplots(figsize=(9, 4.5))
 data = [ok[ok.cue == c].response_ms.values for c in COMMANDS]
 bp = ax.boxplot(data, patch_artist=True, showfliers=True)
 for p, c in zip(bp["boxes"], colors): p.set_facecolor(c); p.set_alpha(0.6)
 ax.set_xticks(range(1, len(COMMANDS) + 1)); ax.set_xticklabels(COMMANDS, rotation=35, ha="right")
-ax.set_ylabel("Response time (ms)\ncue on screen → device output")
-ax.set_title("Response time per command (correct trials)")
-fig.tight_layout(); fig.savefig(os.path.join(out, "fig_response_time.png"), dpi=200); plt.close(fig)
+ax.set_ylabel("Latency (ms)")
+ax.set_title("System Response Latency by Command (Cue to Output)")
+fig.tight_layout()
+
+
+fig.savefig(os.path.join(out, "fig_response_time.png"), dpi=200); 
+plt.close(fig)
 if extra: print("Note: unexpected detected labels:", extra)
 print("\nSaved tables and figures to", out)
